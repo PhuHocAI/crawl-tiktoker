@@ -1,11 +1,13 @@
 import asyncio
 import csv
+import ctypes
 import re
+import sys
 import threading
 import tkinter as tk
 import unicodedata
 from pathlib import Path
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 
 from crawl import (
     OUTPUT_CSV,
@@ -18,10 +20,11 @@ from crawl import (
 class TikTokCrawlerGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
-        self.root.title("TikTok User Crawler")
+        self._set_window_icon()
+        self.root.title("Tool Crawl BAY TÓC")
         self.root.geometry("980x620")
 
-        self.query_var = tk.StringVar(value="Nhà đất Hà Nội")
+        self.query_var = tk.StringVar(value="")
         self.output_var = tk.StringVar(value=OUTPUT_CSV)
         self.idle_rounds_var = tk.StringVar(value=str(MAX_IDLE_SCROLL_ROUNDS))
         self.scroll_pause_var = tk.StringVar(value=str(SCROLL_PAUSE_MS))
@@ -31,9 +34,55 @@ class TikTokCrawlerGUI:
         self.stop_event = threading.Event()
         self.crawl_thread = None
         self.output_auto_mode = True
+        documents_dir = Path.home() / "Documents"
+        self.output_dir = documents_dir if documents_dir.exists() else Path.home()
+        self.output_dir_var = tk.StringVar(value=f"Thư mục lưu: {self.output_dir}")
 
         self._build_ui()
         self._refresh_output_filename()
+
+    def _set_window_icon(self):
+        try:
+            if sys.platform.startswith("win"):
+                try:
+                    ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("toolcrawltiktok.app")
+                except Exception:
+                    pass
+
+            if getattr(sys, "frozen", False):
+                base_dir = Path(getattr(sys, "_MEIPASS", Path(sys.executable).parent))
+            else:
+                base_dir = Path(__file__).resolve().parent
+
+            icon_candidates = [base_dir / "icon.ico"]
+            if getattr(sys, "frozen", False):
+                icon_candidates.append(Path(sys.executable))
+
+            icon_path = next((p for p in icon_candidates if p.exists()), None)
+            if not icon_path:
+                return
+
+            self.root.iconbitmap(default=str(icon_path))
+
+            if sys.platform.startswith("win"):
+                try:
+                    self.root.update_idletasks()
+                    hwnd = ctypes.windll.user32.GetParent(self.root.winfo_id())
+                    image_icon = 1
+                    lr_loadfromfile = 0x00000010
+                    icon_big = 1
+                    icon_small = 0
+                    wm_seticon = 0x0080
+                    hicon = ctypes.windll.user32.LoadImageW(
+                        0, str(icon_path), image_icon, 0, 0, lr_loadfromfile
+                    )
+                    if hicon:
+                        ctypes.windll.user32.SendMessageW(hwnd, wm_seticon, icon_small, hicon)
+                        ctypes.windll.user32.SendMessageW(hwnd, wm_seticon, icon_big, hicon)
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _build_ui(self):
         form = ttk.Frame(self.root, padding=12)
@@ -48,12 +97,16 @@ class TikTokCrawlerGUI:
         self.output_entry = ttk.Entry(form, textvariable=self.output_var, width=50)
         self.output_entry.grid(row=1, column=1, sticky="we", pady=4)
         self.output_entry.bind("<KeyRelease>", self._on_output_edited)
+        ttk.Button(form, text="Chọn thư mục", command=self.choose_output_directory).grid(
+            row=1, column=2, sticky="w", padx=(16, 0), pady=4
+        )
+        ttk.Label(form, textvariable=self.output_dir_var).grid(row=1, column=3, sticky="w", pady=4)
 
         ttk.Label(form, text="Idle rounds:").grid(row=0, column=2, sticky="w", padx=(16, 0), pady=4)
         ttk.Entry(form, textvariable=self.idle_rounds_var, width=10).grid(row=0, column=3, sticky="w", pady=4)
 
-        ttk.Label(form, text="Scroll pause (ms):").grid(row=1, column=2, sticky="w", padx=(16, 0), pady=4)
-        ttk.Entry(form, textvariable=self.scroll_pause_var, width=10).grid(row=1, column=3, sticky="w", pady=4)
+        ttk.Label(form, text="Scroll pause (ms):").grid(row=0, column=4, sticky="w", padx=(16, 0), pady=4)
+        ttk.Entry(form, textvariable=self.scroll_pause_var, width=10).grid(row=0, column=5, sticky="w", pady=4)
 
         ttk.Checkbutton(form, text="Headless", variable=self.headless_var).grid(
             row=2, column=0, sticky="w", pady=4
@@ -63,12 +116,12 @@ class TikTokCrawlerGUI:
         )
 
         self.run_button = ttk.Button(form, text="Chạy crawl", command=self.run_crawl)
-        self.run_button.grid(row=2, column=2, sticky="w", pady=8)
+        self.run_button.grid(row=2, column=4, sticky="w", pady=8)
 
         self.stop_button = ttk.Button(form, text="Dừng crawl", command=self.stop_crawl, state="disabled")
-        self.stop_button.grid(row=2, column=3, sticky="w", pady=8)
+        self.stop_button.grid(row=2, column=5, sticky="w", pady=8)
 
-        ttk.Label(form, textvariable=self.status_var).grid(row=3, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        ttk.Label(form, textvariable=self.status_var).grid(row=3, column=0, columnspan=6, sticky="w", pady=(4, 0))
 
         form.columnconfigure(1, weight=1)
 
@@ -102,7 +155,7 @@ class TikTokCrawlerGUI:
         no_accents = "".join(ch for ch in normalized if unicodedata.category(ch) != "Mn")
         compact = re.sub(r"[^a-z0-9]+", "", no_accents)
         if not compact:
-            compact = "tiktok_users"
+            compact = "demo"
         return f"{compact}.csv"
 
     def _refresh_output_filename(self):
@@ -117,17 +170,32 @@ class TikTokCrawlerGUI:
         auto_output = self._slugify_filename(self.query_var.get())
         self.output_auto_mode = current_output == auto_output
 
+    def choose_output_directory(self):
+        selected = filedialog.askdirectory(initialdir=str(self.output_dir), title="Chọn thư mục lưu CSV")
+        if selected:
+            self.output_dir = Path(selected)
+            self.output_dir_var.set(f"Thư mục lưu: {self.output_dir}")
+
     def run_crawl(self):
         query = self.query_var.get().strip()
-        output_csv = self.output_var.get().strip()
+        output_name = self.output_var.get().strip()
 
         if not query:
             messagebox.showwarning("Thiếu dữ liệu", "Vui lòng nhập từ khóa.")
             return
 
-        if not output_csv:
+        if not output_name:
             messagebox.showwarning("Thiếu dữ liệu", "Vui lòng nhập tên file CSV.")
             return
+
+        output_path = Path(output_name)
+        if not output_path.suffix:
+            output_path = output_path.with_suffix(".csv")
+
+        if not output_path.is_absolute():
+            output_path = self.output_dir / output_path.name
+
+        output_csv = str(output_path)
 
         try:
             idle_rounds = int(self.idle_rounds_var.get().strip())

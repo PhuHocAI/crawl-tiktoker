@@ -6,8 +6,8 @@ from urllib.parse import quote_plus
 from playwright.async_api import async_playwright
 
 # Đổi từ khóa tìm kiếm trực tiếp tại đây
-SEARCH_QUERY = "Nhà đất Hà Nội"
-OUTPUT_CSV = "tiktok_users.csv"
+SEARCH_QUERY = ""
+OUTPUT_CSV = "demo.csv"
 MAX_IDLE_SCROLL_ROUNDS = 5
 SCROLL_PAUSE_MS = 1200
 BROWSER_ARGS = [
@@ -110,16 +110,36 @@ async def crawl_tiktok_users(
                 pass
 
     async with async_playwright() as p:
+        browser = None
+        launch_errors = []
+
+        launch_attempts = [
+            {"channel": "chrome", "headless": headless, "name": f"Chrome channel (headless={headless})"},
+            {"channel": None, "headless": headless, "name": f"Playwright Chromium (headless={headless})"},
+        ]
+
         if headless:
-            # Headless ổn định hơn khi dùng Chromium mặc định.
-            browser = await p.chromium.launch(headless=True, args=BROWSER_ARGS)
-        else:
+            launch_attempts.append({"channel": "chrome", "headless": False, "name": "Chrome channel (fallback visible)"})
+            launch_attempts.append({"channel": None, "headless": False, "name": "Playwright Chromium (fallback visible)"})
+
+        for attempt in launch_attempts:
             try:
-                # Ưu tiên dùng Chrome thường (channel="chrome"). Nếu thiếu, fallback Chromium.
-                browser = await p.chromium.launch(channel="chrome", headless=False, args=BROWSER_ARGS)
-            except Exception:
-                report("Không tìm thấy Chrome channel, dùng Chromium đi kèm Playwright.")
-                browser = await p.chromium.launch(headless=False, args=BROWSER_ARGS)
+                launch_kwargs = {"headless": attempt["headless"], "args": BROWSER_ARGS}
+                if attempt["channel"]:
+                    launch_kwargs["channel"] = attempt["channel"]
+                browser = await p.chromium.launch(**launch_kwargs)
+                report(f"Dùng browser: {attempt['name']}")
+                break
+            except Exception as error:
+                launch_errors.append(f"{attempt['name']}: {error}")
+
+        if browser is None:
+            report("Không mở được browser runtime cho Playwright.")
+            report("Hãy chạy 1 lần trong môi trường máy build/chạy app:")
+            report("1) playwright install")
+            report("2) hoặc python -m playwright install")
+            report("Chi tiết lỗi: " + " | ".join(launch_errors))
+            return 0
 
         context = await browser.new_context(
             viewport={"width": 1366, "height": 2200},
